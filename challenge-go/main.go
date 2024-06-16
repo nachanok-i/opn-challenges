@@ -38,12 +38,18 @@ func main() {
 	}
 
 	// Output results
-	fmt.Println("total received: THB ", total)
-	fmt.Println("average per person: THB ", average)
-	fmt.Println("top donors: ", topDonors)
+	fmt.Println("Total received: THB", total)
+	fmt.Println("Average per person: THB", average)
+	fmt.Println("Top donors:", topDonors)
 
-	// Print the mapped structs
+	// Print the mapped structs and charge transactions
 	for _, result := range results {
-		fmt.Printf("Mapped struct: %+v\n", result)
+		chargeResp, err := utils.ChargeTransaction(&result)
+		if err != nil {
+			fmt.Println("Error charging transaction:", err)
+
+			continue
+		}
+		fmt.Printf("Charge response: %+v\n", chargeResp)
 	}
 }
