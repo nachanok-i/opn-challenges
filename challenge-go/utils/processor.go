@@ -1,49 +1,117 @@
 package utils
 
 import (
+	"bytes"
+	"context"
+	"encoding/csv"
 	"fmt"
+	"os"
 	"strconv"
+	"sync"
 
+	"github.com/joho/godotenv"
 	"github.com/nachanok-i/opn-challenges/models"
+	"golang.org/x/time/rate"
 )
 
-// ProcessRecords processes CSV records and maps them to Tamboon structs
-func ProcessRecords(records [][]string) ([]models.Tamboon, int, float64, []string, error) {
-	if len(records) < 2 {
-		return nil, 0, 0, nil, fmt.Errorf("no data in CSV records")
+// Define the rate limit
+const requestsPerSecond = 2 // Example: 2 requests per second
+const burstLimit = 5        // Burst limit for rate limiter
+
+// ProcessFile processes the decoded CSV data and calls the charge API
+func ProcessFile(data []byte) {
+	fmt.Println("performing donations...")
+
+	// Number of worker goroutines
+	var numWorkers int
+
+	// Load environment variables from .env file
+	err := godotenv.Load()
+	if err != nil {
+		fmt.Println("error loading .env file: %w", err)
+		// Set default numWorkers to 10
+		numWorkers = 10
+	} else {
+		numWorkers = atoi(os.Getenv("NUMBER_OF_WORKERS"))
 	}
 
-	headers := records[0]
-	fmt.Println("Headers:", headers)
+	// Create a CSV reader from decoded data
+	reader := csv.NewReader(bytes.NewReader(data))
 
-	var results []models.Tamboon
-	var total, top int
-	var topDonors []string
+	// Create channels
+	transactionChan := make(chan *models.Tamboon)
+	errorsChan := make(chan error)
+	wg := sync.WaitGroup{}
 
-	for _, record := range records[1:] {
-		amount, err := strconv.Atoi(record[1])
-		if err != nil {
-			return nil, 0, 0, nil, fmt.Errorf("error converting AmountSubunits to int: %w", err)
-		}
+	// Create a rate limiter
+	limiter := rate.NewLimiter(rate.Limit(requestsPerSecond), burstLimit)
 
-		result := models.Tamboon{
-			Name:           record[0],
-			AmountSubunits: amount,
-			CCNumber:       record[2],
-			CVV:            record[3],
-			ExpMonth:       record[4],
-			ExpYear:        record[5],
+	// Start the reader goroutine
+	go func() {
+		defer close(transactionChan)
+		for {
+			record, err := reader.Read()
+			if err != nil {
+				if err.Error() == "EOF" {
+					break
+				}
+				errorsChan <- fmt.Errorf("error reading CSV: %v", err)
+				return
+			}
+			// Convert record to models.Tamboon
+			transaction := &models.Tamboon{
+				Name:           record[0],
+				AmountSubunits: atoi(record[1]),
+				CCNumber:       record[2],
+				CVV:            record[3],
+				ExpMonth:       record[4],
+				ExpYear:        record[5],
+			}
+			transactionChan <- transaction
 		}
-		results = append(results, result)
-		total += amount
-		if top < amount {
-			top = amount
-			topDonors = []string{result.Name}
-		} else if top == amount {
-			topDonors = append(topDonors, result.Name)
-		}
+	}()
+
+	// Start worker goroutines
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for record := range transactionChan {
+				// Wait for permission from the rate limiter
+				if err := limiter.Wait(context.Background()); err != nil {
+					errorsChan <- fmt.Errorf("rate limiter error: %v", err)
+					continue
+				}
+
+				// Process the record and call the charge API
+				chargeResp, err := ChargeTransaction(record)
+				if err != nil {
+					errorsChan <- fmt.Errorf("error charging transaction for %v: %v", record.Name, err)
+					continue
+				}
+				fmt.Printf("Charge response for %s: %+v\n", record.Name, chargeResp)
+			}
+		}()
 	}
 
-	average := float64(total) / float64(len(results))
-	return results, total, average, topDonors, nil
+	// Wait for all workers to finish
+	go func() {
+		wg.Wait()
+		close(errorsChan)
+	}()
+
+	// Handle errors
+	for err := range errorsChan {
+		fmt.Println(err)
+	}
+
+	fmt.Println("done.")
+}
+
+func atoi(s string) int {
+	i, err := strconv.Atoi(s)
+	if err != nil {
+		return 0
+	}
+	return i
 }
