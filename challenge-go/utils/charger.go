@@ -2,7 +2,6 @@ package utils
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"strconv"
 	"time"
@@ -13,14 +12,14 @@ import (
 	"github.com/omise/omise-go/operations"
 )
 
-func ChargeTransaction(request *models.Tamboon) (*models.ChargeResponse, error) {
+func ChargeTransaction(request *models.Tamboon) error {
 	month, err := stringToMonth(request.ExpMonth)
 	if err != nil {
 		fmt.Println(err)
 	}
 	yearInt, err := strconv.Atoi(request.ExpYear)
 	if err != nil {
-		return nil, fmt.Errorf("invalid year: %s", request.ExpYear)
+		return fmt.Errorf("invalid year: %s", request.ExpYear)
 	}
 	tokenRequest := &operations.CreateToken{
 		Name:            request.Name,
@@ -29,25 +28,21 @@ func ChargeTransaction(request *models.Tamboon) (*models.ChargeResponse, error) 
 		ExpirationYear:  yearInt + 5,
 		SecurityCode:    request.CVV,
 	}
-	fmt.Println("ExpYear: ", tokenRequest.ExpirationYear)
 	card, err := createTokenFromCard(tokenRequest)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	chargeRequest := &operations.CreateCharge{
 		Amount:   int64(request.AmountSubunits),
 		Currency: "thb",
 		Card:     card.ID,
 	}
-	charge, err := chargeTransactionFromToken(chargeRequest)
+	_, err = chargeTransactionFromToken(chargeRequest)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	result := &models.ChargeResponse{
-		Status:   "Success",
-		ChargeId: charge.ID,
-	}
-	return result, nil
+
+	return nil
 }
 
 // initializeOmiseClient initializes a new Omise client with API keys from environment variables
@@ -81,7 +76,6 @@ func createTokenFromCard(request *operations.CreateToken) (*omise.Card, error) {
 
 	result := &omise.Card{}
 	err = client.Do(result, request)
-	log.Println(result)
 	return result, err
 }
 
@@ -93,7 +87,6 @@ func chargeTransactionFromToken(request *operations.CreateCharge) (*omise.Charge
 
 	result := &omise.Charge{}
 	err = client.Do(result, request)
-	log.Println(result)
 	return result, err
 }
 

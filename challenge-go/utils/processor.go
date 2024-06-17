@@ -8,15 +8,52 @@ import (
 	"os"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/joho/godotenv"
 	"github.com/nachanok-i/opn-challenges/models"
 	"golang.org/x/time/rate"
 )
 
-// Define the rate limit
-const requestsPerSecond = 2 // Example: 2 requests per second
-const burstLimit = 5        // Burst limit for rate limiter
+var limiter *rate.Limiter
+var limiterMu sync.Mutex
+
+// Function to apply rate limiting when necessary
+func applyRateLimit() {
+	limiterMu.Lock()
+	defer limiterMu.Unlock()
+	if limiter == nil {
+		limiter = rate.NewLimiter(rate.Limit(2), 5) // Adjust the rate limit as needed
+	}
+}
+
+// Function to process a single transaction with retry logic
+func processTransaction(record *models.Tamboon, errorsChan chan error) {
+	if limiter != nil {
+		limiter.Wait(context.Background())
+	}
+
+	err := ChargeTransaction(record)
+	if err != nil {
+		if err.Error() == "(429/too_many_requests) API rate limit has been exceeded" {
+			fmt.Println("Rate limit exceeded")
+			// Rate limit hit, apply rate limit and retry
+			applyRateLimit()
+			fmt.Println("Rate limit hit, pausing for a while...")
+			time.Sleep(1 * time.Minute) // Adjust the sleep duration as necessary
+
+			// Retry the transaction after pause
+			err = ChargeTransaction(record)
+			if err != nil {
+				errorsChan <- fmt.Errorf("error retrying transaction for %v: %v", record.Name, err)
+				return
+			}
+		} else {
+			errorsChan <- fmt.Errorf("error charging transaction for %v: %v", record.Name, err)
+			return
+		}
+	}
+}
 
 // ProcessFile processes the decoded CSV data and calls the charge API
 func ProcessFile(data []byte) {
@@ -38,13 +75,16 @@ func ProcessFile(data []byte) {
 	// Create a CSV reader from decoded data
 	reader := csv.NewReader(bytes.NewReader(data))
 
+	// Read and ignore the header row
+	if _, err := reader.Read(); err != nil {
+		fmt.Printf("Error reading header: %v\n", err)
+		return
+	}
+
 	// Create channels
 	transactionChan := make(chan *models.Tamboon)
 	errorsChan := make(chan error)
 	wg := sync.WaitGroup{}
-
-	// Create a rate limiter
-	limiter := rate.NewLimiter(rate.Limit(requestsPerSecond), burstLimit)
 
 	// Start the reader goroutine
 	go func() {
@@ -77,19 +117,8 @@ func ProcessFile(data []byte) {
 		go func() {
 			defer wg.Done()
 			for record := range transactionChan {
-				// Wait for permission from the rate limiter
-				if err := limiter.Wait(context.Background()); err != nil {
-					errorsChan <- fmt.Errorf("rate limiter error: %v", err)
-					continue
-				}
-
-				// Process the record and call the charge API
-				chargeResp, err := ChargeTransaction(record)
-				if err != nil {
-					errorsChan <- fmt.Errorf("error charging transaction for %v: %v", record.Name, err)
-					continue
-				}
-				fmt.Printf("Charge response for %s: %+v\n", record.Name, chargeResp)
+				fmt.Println("record: ", record)
+				processTransaction(record, errorsChan)
 			}
 		}()
 	}

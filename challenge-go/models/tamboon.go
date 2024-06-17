@@ -8,8 +8,3 @@ type Tamboon struct {
 	ExpMonth       string
 	ExpYear        string
 }
-
-type ChargeResponse struct {
-	Status   string
-	ChargeId string
-}
