@@ -6,6 +6,19 @@ Please use go version 1.21.1 or newer to run this program.
 I added 5 years in the credit card expiration year to make
 some transaction pass the error "Expiration year can't be in the past"
 
+.env file is required to run this program using the go command
+```sh
+go run main.go data/fng.1000.csv.rot128
+```
+The .env file structure is
+```
+OMISE_PUBLIC_KEY=
+OMISE_SECRET_KEY=
+NUMBER_OF_WORKERS=10
+```
+Public and Secret keys are from https://dashboard.omise.co/ and
+number of workers can be adjust as you like.
+
 # GO-TAMBOON ไปทำบุญ
 
 This is a small challenge project to see how good you are with Go. Included in this
