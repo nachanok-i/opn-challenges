@@ -28,7 +28,7 @@ func applyRateLimit() {
 }
 
 // Function to process a single transaction with retry logic
-func processTransaction(record *models.Tamboon, errorsChan chan error) {
+func processTransaction(record *models.Tamboon, errorsChan chan error, report *models.Report, reportMu *sync.Mutex) {
 	if limiter != nil {
 		limiter.Wait(context.Background())
 	}
@@ -36,28 +36,40 @@ func processTransaction(record *models.Tamboon, errorsChan chan error) {
 	err := ChargeTransaction(record)
 	if err != nil {
 		if err.Error() == "(429/too_many_requests) API rate limit has been exceeded" {
-			fmt.Println("Rate limit exceeded")
+			log.Debug("Rate limit exceeded")
 			// Rate limit hit, apply rate limit and retry
 			applyRateLimit()
-			fmt.Println("Rate limit hit, pausing for a while...")
-			time.Sleep(1 * time.Minute) // Adjust the sleep duration as necessary
+			log.Debug("Rate limit hit, pausing for a while...")
+			time.Sleep(2 * time.Second) // Adjust the sleep duration as necessary
 
 			// Retry the transaction after pause
 			err = ChargeTransaction(record)
 			if err != nil {
 				errorsChan <- fmt.Errorf("error retrying transaction for %v: %v", record.Name, err)
+				reportMu.Lock()
+				report.Failed += record.AmountSubunits
+				reportMu.Unlock()
 				return
 			}
 		} else {
 			errorsChan <- fmt.Errorf("error charging transaction for %v: %v", record.Name, err)
+			reportMu.Lock()
+			report.Failed += record.AmountSubunits
+			reportMu.Unlock()
 			return
 		}
 	}
+	reportMu.Lock()
+	report.Success += record.AmountSubunits
+	reportMu.Unlock()
 }
 
 // ProcessFile processes the decoded CSV data and calls the charge API
-func ProcessFile(data []byte) {
+func ProcessFile(data []byte) *models.Report {
+	log := GetLogger()
 	fmt.Println("performing donations...")
+	report := &models.Report{}
+	var reportMu sync.Mutex
 
 	// Number of worker goroutines
 	var numWorkers int
@@ -65,7 +77,7 @@ func ProcessFile(data []byte) {
 	// Load environment variables from .env file
 	err := godotenv.Load()
 	if err != nil {
-		fmt.Println("error loading .env file: %w", err)
+		log.Debug("error loading .env file: %w", err)
 		// Set default numWorkers to 10
 		numWorkers = 10
 	} else {
@@ -77,8 +89,7 @@ func ProcessFile(data []byte) {
 
 	// Read and ignore the header row
 	if _, err := reader.Read(); err != nil {
-		fmt.Printf("Error reading header: %v\n", err)
-		return
+		log.Debug("Error reading header: ", err)
 	}
 
 	// Create channels
@@ -108,6 +119,14 @@ func ProcessFile(data []byte) {
 				ExpYear:        record[5],
 			}
 			transactionChan <- transaction
+			report.TotalReceived += transaction.AmountSubunits
+			report.TotalDonator++
+			if report.TopDonateAmount < transaction.AmountSubunits {
+				report.TopDonateAmount = transaction.AmountSubunits
+				report.TopDonors = []string{transaction.Name}
+			} else if report.TopDonateAmount == transaction.AmountSubunits {
+				report.TopDonors = append(report.TopDonors, transaction.Name)
+			}
 		}
 	}()
 
@@ -117,8 +136,8 @@ func ProcessFile(data []byte) {
 		go func() {
 			defer wg.Done()
 			for record := range transactionChan {
-				fmt.Println("record: ", record)
-				processTransaction(record, errorsChan)
+				log.Debug("record: ", record)
+				processTransaction(record, errorsChan, report, &reportMu)
 			}
 		}()
 	}
@@ -131,10 +150,11 @@ func ProcessFile(data []byte) {
 
 	// Handle errors
 	for err := range errorsChan {
-		fmt.Println(err)
+		log.Debug(err)
 	}
 
 	fmt.Println("done.")
+	return report
 }
 
 func atoi(s string) int {

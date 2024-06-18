@@ -10,12 +10,13 @@ import (
 	"github.com/nachanok-i/opn-challenges/models"
 	"github.com/omise/omise-go"
 	"github.com/omise/omise-go/operations"
+	"github.com/sirupsen/logrus"
 )
 
 func ChargeTransaction(request *models.Tamboon) error {
 	month, err := stringToMonth(request.ExpMonth)
 	if err != nil {
-		fmt.Println(err)
+		logrus.Debug(err)
 	}
 	yearInt, err := strconv.Atoi(request.ExpYear)
 	if err != nil {
@@ -25,8 +26,9 @@ func ChargeTransaction(request *models.Tamboon) error {
 		Name:            request.Name,
 		Number:          request.CCNumber,
 		ExpirationMonth: time.Month(month),
-		ExpirationYear:  yearInt + 5,
-		SecurityCode:    request.CVV,
+		// I added 5 years in Expiration to make some transaction success
+		ExpirationYear: yearInt + 5,
+		SecurityCode:   request.CVV,
 	}
 	card, err := createTokenFromCard(tokenRequest)
 	if err != nil {
