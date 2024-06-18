@@ -1,3 +1,11 @@
+# How to run this program
+```sh
+./tamboon data/fng.1000.csv.rot128
+```
+Please use go version 1.21.1 or newer to run this program.
+I added 5 years in the credit card expiration year to make
+some transaction pass the error "Expiration year can't be in the past"
+
 # GO-TAMBOON ไปทำบุญ
 
 This is a small challenge project to see how good you are with Go. Included in this
