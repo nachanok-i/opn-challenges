@@ -1,2 +1,6 @@
 data/*.csv
 gen
+app.log
+
+# Environments
+.env
